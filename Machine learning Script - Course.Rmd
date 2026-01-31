@@ -1,0 +1,954 @@
+KØR ALT DETTE FØRST
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+fastDummies,
+forecast,
+glmnet,
+caret,
+FNN,
+e1071,
+igraph,
+here)
+
+install.packages("devtools", dependencies = T) library(devtools)
+install_version("space",  version  =  "0.1-1.1",  repos
+= "http://cran.us.r-project.org")
+
+
+# ---------------------------------------------------------------------------------------
+
+# R-SCRIPTS FOR SLIDE 3,4,5
+
+# ---------------------------------------------------------------------------------------
+
+
+
+
+# 3 Linear Regression
+
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/3 - Linear Regression/Datasets")
+
+
+## Multiple Linear Regression
+
+```{r}
+# OLS SIMULATION
+
+# IMPLEMENTING OLS
+basic_ols <- function(Y, X){
+beta_hat <- solve(t(X) %*% X) %*% (t(X) %*% Y)
+return(beta_hat)
+}
+
+# OLS simulation
+
+# Fixing the random number generator seed:
+set.seed(1)
+# Simulation parameters:
+n <- 20
+R <- 500
+# Model parameters:
+beta_0 <- 10
+beta_1 <- 5
+beta_2 <- 2
+# Storage matrix for the results: 
+beta_hat_storage <- matrix(0, 3, R)
+
+for(r in 1:R){
+# Draw the errors as standard normal:
+eps <- rnorm(n)
+# Also draw the regressors as standard normals:
+X <- matrix(rnorm(2 * n), n, 2)
+# The regressors are independent of the errors.
+# Including the constant in X:
+X	<- cbind(rep(1,n), X)
+
+# We can then calculate the dependent variable as:
+Y	<- X %*% c(beta_0, beta_1, beta_2) + eps
+# Alternatively:
+#Y <- beta_0 + beta_1 * X[,2] + beta_2 * X[,3] + eps
+# Using our function to estimate the coefficients: 
+beta_hat <- basic_ols(Y,X)
+# Storing the results: 
+beta_hat_storage[,r] <- beta_hat
+
+}
+
+# Calculating the mean: 
+rowMeans(beta_hat_storage)
+```
+
+
+data <- read.csv("WestRoxbury.csv")
+## Data Partitioning in R
+
+```{r}
+# PARTITIONING
+set.seed(1)
+
+
+
+# TWO PARTITIONS
+n <- dim(data)[1]
+train_ind <- sample(1:n, n * 0.6)
+
+train_data <- data[train_ind, ] 
+test_data <- data[-train_ind, ]
+
+# THREE PARTITIONS
+train_ind <- sample(1:n, n * 0.5)
+valid_ind <- sample(setdiff(1:n, train_ind), n * 0.3)
+
+train_data <- data[train_ind, ] 
+valid_data <- data[valid_ind, ]
+test_data <- data[-c(train_ind, valid_ind), ]
+```
+
+## Example: West Roxburry Dataset
+```{r}
+set.seed(1)
+
+n <- dim(data)[1]
+
+# PRE-PROCESSING
+
+data <- dummy_cols(data, remove_selected_columns = T, remove_first_dummy = T)
+
+ind <- data$YR.BUILT == 0 
+data$YR.BUILT[ind] <- NA
+data$YR.BUILT[ind] <- mean(data$YR.BUILT, na.rm = T)
+
+# DATA PARTITIONING
+train_ind <- sample(1:n, n * 0.6) 
+train_data <- data[train_ind, ] 
+test_data <- data[-train_ind, ]
+
+n_p <- length(test_data$TOTAL.VALUE)
+
+# REGRESSING
+reg <- lm(TOTAL.VALUE ~ .-TAX, data = data, subset = train_ind)
+
+# CHECKING RESULTS
+summary(reg)
+
+# SUMMARISING THE FIT RESULTS
+tr_res <- data.frame(train_data$TOTAL.VALUE, reg$fitted.values, reg$residuals)
+names(tr_res) <- c("Actual", "Fitted", "Residual") 
+head(tr_res)
+
+# PREDICTION ON TEST SET
+pred <- predict(reg, newdata = test_data)	
+
+# SUMMARISING THE PREDICTION RESULTS
+pred_err <- test_data$TOTAL.VALUE - pred
+
+res <- data.frame(test_data$TOTAL.VALUE, pred, pred_err) 
+names(res) <- c("Actual", "Predicted", "Prediction Error") 
+head(res)
+
+# PREDICTION PERFORMANCE MEASURE
+accuracy(pred, test_data$TOTAL.VALUE)
+
+# MEASURING MODEL FIT
+accuracy(reg$fitted.values,  train_data$TOTAL.VALUE)	
+
+# CHECKING PREDICTION ERRORS
+summary(pred_err)
+
+boxplot(pred_err, range = 0)
+
+hist(pred_err, breaks = seq(-300, 300, 10))
+
+sum(abs(pred_err) > 100) / n_p
+
+# COMPARE WITH NAIVE BENCHMARK
+nb_pred <- rep(mean(train_data$TOTAL.VALUE), n_p)
+accuracy(nb_pred, test_data$TOTAL.VALUE)
+
+# --------------------------------------------------------
+# DEPLOYING THE MODEL ON NEW DATA
+new_data <- read.csv("WestRoxbury_new.csv")
+
+# PREDICTING NEW OBSERVATIONS
+pred_new <- predict(reg, newdata = new_data) 
+pred_new
+```
+
+## High Dimensional Linear Regression
+
+### RIDGE REGRESSION
+```{r}
+# DEALING WITH CATEGORICAL VARIABLESORICAL
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/3 - Linear Regression/Datasets")
+data <- read.csv("Credit.csv")[,-1] 
+
+summary(data)
+
+data <- dummy_cols(data, remove_first_dummy = T, remove_selected_columns = T)
+
+# PARTITIONING
+n <- dim(data)[1]
+train_ind <- sample(1:n, n * 0.6) 
+train_data <- data[train_ind, ] 
+test_data <- data[-train_ind, ]
+
+# RIDGE REGRESSION
+X = as.matrix(subset(train_data, select = -Balance)) 
+Y = train_data$Balance
+
+reg_ridge_1 <- glmnet(X, Y, alpha = 0)
+
+# CHECKING RESULTS
+reg_ridge_1$lambda 
+dim(coef(reg_ridge_1)) 
+coef(reg_ridge_1) 
+coef(reg_ridge_1)[,1]
+
+lambda_grid <- 10^seq(10, -2, length = 10)
+reg_ridge_2 <- glmnet(X, Y, alpha = 0, lambda = lambda_grid)
+
+# COMPARING WITH OLS ESTIMATES
+reg_ols <- lm(Balance ~., data = data, subset = train_ind)
+
+coef(reg_ridge_2) 
+coef(reg_ridge_2)[,10]
+reg_ols$coefficients
+
+# CHOOSING OPTIMAL LAMBDA
+coef(reg_ridge_2) 
+coef(reg_ridge_2)[,10] 
+reg_ols$coefficients
+
+lambda_grid <- 10^seq(10, -2, length = 100)
+cv_out <- cv.glmnet(X, Y, alpha = 0, nfolds = 5, lambda = lambda_grid)
+plot(cv_out)
+
+lambda_opt <- cv_out$lambda.min
+
+reg_ridge <- glmnet(X, Y, alpha = 0, lambda = lambda_opt) 
+coef(reg_ridge)
+
+# EVALUATING PERFORMANCE - predict the testing data using our ridge model:
+test_X <- as.matrix(subset(test_data, select = -Balance)) 
+pred_ridge <- as.vector(predict(reg_ridge, newx = test_X))
+
+# MEASURING PREDICTION ACCURACY
+accuracy(pred_ridge, test_data$Balance)
+
+
+```
+
+### LASSO REGRESSION
+```{r}
+reg_lasso_1 <- glmnet(X, Y, alpha = 1)	
+
+# CHECKING RESULTS
+reg_lasso_1$lambda 
+dim(coef(reg_lasso_1)) 
+coef(reg_lasso_1)[,1]
+
+# CHOOSING OPTIMAL LAMBDA AND EVALUATING
+cv_out <- cv.glmnet(X, Y, alpha = 1, nfolds = 5) 
+plot(cv_out)
+lambda_opt <- cv_out$lambda.min
+
+reg_lasso <- glmnet(X, Y, alpha = 1, lambda = lambda_opt) 
+coef(reg_lasso)
+
+pred_lasso <- as.vector(predict(reg_lasso, newx = as.matrix(subset(test_data, select = -Balance)))) 
+accuracy(pred_lasso, test_data$Balance)
+```
+
+# ---------------------------------------------------------------------------------------
+
+
+# 4 CLASSIFICATION AND CLUSTERING
+
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/4 - Classification and Clustering/Datasets")
+
+## K-NEARES NEIGHBOURS
+```{r}
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/4 - Classification and Clustering/Datasets")
+data <- read.csv("RidingMowers.csv")	
+
+# create an extra (artificial) observation to classify:
+new_data <- data.frame(Income = 60, Lot_Size = 20)
+
+# VISUALISE USING SCATTER PLOT
+colours <- ifelse(data$Ownership == "Owner", "red", "blue") 
+plot(data$Lot_Size ~ data$Income, ylab = "Lot size", xlab = "Income", col = colours)
+points(new_data, pch = 4)
+text(data$Income, data$Lot_Size, rownames(data), pos = 4) 
+legend("topleft", legend = c("Ownership = 1", "Ownership = 0", "New obs."), col = c("red", "blue", "black"), pch = c(1,1,4), cex = 0.25)
+
+# STANDARDIZING THE DATA
+st_mod <- preProcess(data[,1:2], method = c("center", "scale"))
+
+# STANDARDISING BOTH TRAINING SET AND NEW DATA
+data_st <- cbind(predict(st_mod, data[,1:2]), data$Ownership) 
+new_data_st <- predict(st_mod, new_data)
+
+# APPLYING K-NN
+knn(train = data_st[,1:2], test = new_data_st, cl = data_st[,3], k = 1)
+
+# RUNNING FOR VARIOUS K-VALUES
+knn(data_st[,1:2], new_data_st, data_st[,3], k = 3)
+knn(data_st[,1:2], new_data_st, data_st[,3], k = 5)
+
+# ---------------------------------------------------------
+
+# CONSIDERING ANOTHER EXAMPLE
+data <- read.csv("Default.csv")
+
+# PARTITIONING THE DATA
+# The indices:
+n <- dim(data)[1]
+train_ind <- sample(1:n, n * 0.5)
+valid_ind <- sample(setdiff(1:n, train_ind), n * 0.3)
+# The data partitions:
+train_data <- data[train_ind, ] valid_data <- data[valid_ind, ]
+test_data <- data[-c(train_ind, valid_ind), ]
+
+# STANDARDIZING THE DATA - WE SET DATA UP FOR K-NN HERE
+train_X <- subset(train_data, select = -default) 
+train_Y <- train_data[["default"]]
+valid_X <- subset(valid_data, select = -default) 
+valid_Y <- valid_data[["default"]]
+test_X <- subset(test_data, select = -default) 
+test_Y <- test_data[["default"]]
+
+# STANDARDISING ALL SETS USING ONLY TRAINING SET
+st_mod <- preProcess(train_X, method = c("center", "scale")) 
+train_X <- predict(st_mod, train_X)
+valid_X <- predict(st_mod, valid_X) 
+test_X <- predict(st_mod, test_X)
+
+# NUMBER OF OBSERVATIONS IN VALIDATION AND TESTING SET
+n_v <- length(valid_Y) 
+n_p <- length(test_Y)
+
+# CONVERTING STUDENT PREDICTOR TO DUMMIES
+train_X <- dummy_cols(train_X, remove_selected_columns = T) 
+valid_X <- dummy_cols(valid_X, remove_selected_columns = T) 
+test_X <- dummy_cols(test_X, remove_selected_columns = T)
+
+# CLASSIFYING TEST SET WITH K=1
+knn_cl <- knn(train_X, test_X, train_Y, k = 1)
+ 
+# CALCULATE TEST ERROR RATE
+sum(as.vector(knn_cl) != test_Y) / n_p
+
+# CALCULATE CONFUSION MATRIX
+table(knn_cl, test_Y)
+
+# CHOSSING K USING VALIDATION SET. WE CONSIDER THE VALUES
+k_cand <- 1:15
+
+# VALIDATION SET ERROR RATE FOR EACH K
+err_v <- numeric(length(k_cand)) 
+for(i in 1:length(k_cand)){
+  k <- k_cand[i]
+  cl <- knn(train_X, valid_X, train_Y, k = k) 
+  err_v[i] <- sum(as.vector(cl) != valid_Y) / n_v
+}
+
+# FIND K WITH LOWEST VALIDATION ERROR AND RUN K-NN
+k_opt <- k_cand[which(err_v == min(err_v))[1]] 
+knn_cl <- knn(train_X, test_X, train_Y, k = k_opt)
+
+# TESTING ERROR RATE AND CONFUSION MATRIX
+sum(as.vector(knn_cl) != test_Y) / n_p
+C <- table(knn_cl, test_Y)
+
+# VAST MAJORITY OF TRAINING OBSERVATIONS ARE NO
+summary(as.factor(train_data$default))
+
+# PERFORMANCE OF NAIVE RULE
+nr_cl <- rep("No", n_p) 
+sum(nr_cl != test_Y) / n_p
+C_nr <- table(nr_class, test_Y)
+
+# SENSITIVITY AND SPECIFICITY
+C[2,2] / sum(C[,2])
+C[1,1] / sum(C[,1])
+
+# CHOOSING CUT OFF VALUE
+
+# We can access the indices and outcomes of the k training observation neighbours of the second testing observation as
+names(attributes(knn_cl)) 
+attributes(knn_cl)$nn.index[2,] 
+train_data[,1][attributes(knn_cl)$nn.index[2,]]
+
+# We can calculate the k-NN probabilities of default using a loop:
+probs <- numeric(n_p) 
+for(i in 1:n_p){
+  votes <- train_data[,1][attributes(knn_cl)$nn.index[i,]] 
+  votes <- as.vector(votes)
+  probs[i] <- sum(votes == "Yes")/length(votes)
+}
+
+# We can then obtain the same results as before with
+co_prob <- 0.5
+knn_cl <- ifelse(probs > co_prob, "Yes", "No")
+
+# Then calculate the error rate, sensitivity and specificity:
+sum(as.vector(knn_cl) != test_Y) / n_p 
+C <- table(knn_cl, test_Y)
+C[2,2] / sum(C[,2])
+C[1,1] / sum(C[,1])
+
+```
+
+## NAIVE BAYES RULE
+```{r}
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/4 - Classification and Clustering/Datasets")
+data <- read.csv("Default.csv")
+
+set.seed(1)
+
+# CONVERTING BALANCE AND INCOME FROM CONTINUOUS TO CATEGORICAL
+data[,3] <- factor(ifelse(data[,3] > 2000, "high", "low"))
+data[,4] <- factor(ifelse(data[,4] > 35000, "high", "low")) 
+summary(data)
+
+# TRAINING THE CLASSIFIER
+nbc <- naiveBayes(default ~., data = train_data)
+
+# Looking at the returned list shows us various probability tables:
+nbs
+
+# We can use the predict() function to classify:
+pred_class <- predict(nbc, newdata = test_data)
+
+# We also use the same function to get the predicted probabilities:
+pred_prob <- predict(nbc, newdata = test_data, type = "raw")
+
+# The classification is based on these with a 50% cut-off:
+any(ifelse(pred_prob[,1] > 0.5, "No", "Yes") != as.vector(pred_class))
+
+# As an exercise, we can also calculate the probabilities manually. We calculate the probability of No for the first testing observation.
+
+# PREDICTOR VALUES
+test_data[1,]
+
+# CALCULATING NUMERATOR AND DENOMINATOR
+nbc
+num <- 0.966 * 0.705 * 0.997 * 0.486
+den <- num + 0.034 * 0.631 * 0.728 * 0.466
+
+# COMPARING RESULTS WITH NAIVEBAYES
+num/den 
+pred_prob[1,]
+
+# EVALUATING PERFORMANCING JUST LIKE WE DID FOR K-NN
+n_p <- dim(test_data)[1] 
+test_Y <- test_data[,1]
+sum(as.vector(pred_class) != as.vector(test_Y)) / n_p 
+C <- table(pred_class, test_Y)
+C[2,2] / sum(C[,2])
+C[1,1] / sum(C[,1])
+
+```
+
+
+## LOGISTIC REGRESSION
+
+```{r}
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/4 - Classification and Clustering/Datasets")
+data <- read.csv("Default.csv")
+set.seed(1)
+
+# CONVERT OUTCOME TO DUMMY
+data[,1] <- ifelse(as.vector(data[,1]) == "No", 0, 1)
+
+# LOGISTIC REGRESSION
+log_reg <- glm(default ~, data = train_data, family = "binomial")
+
+# CHECKING RESULTS
+options(scipen=999) 
+summary(log_reg)
+
+# GETTING PROBABILITIES
+pred_prob <- predict(log_reg, newdata = test_data, type = "response")
+pred_prob <- as.vector(pred_prob)
+
+# GETTING CLASSES WITH STANDARD CUT-OFF VALUE
+pred_cl <- (pred_prob > 0.5) * 1
+
+# EVALUATING PERFORMANCE
+n_p <- dim(test_data)[1] 
+test_Y <- test_data[,1] 
+sum(pred_cl != test_Y) / n_p 
+C <- table(pred_cl, test_Y) 
+C[2,2] / sum(C[,2])
+
+# As before, we can improve sensitivity at the cost of a higher error rate by varying the cut-off probability:
+co_prob <- 0.5
+pred_cl <- (pred_prob > co_prob) * 1
+
+
+
+
+```
+
+## CLUSTERING
+
+### K-MEANS
+
+```{r}
+# First we simulate the data: We have 100 observations on two variables.
+set.seed(1)
+data <- matrix(rnorm(100 * 2), ncol = 2)
+
+# Next we manipulate the data to create two clusters
+data[1:50, 1] = data[1:50, 1] + 3
+data[1:50, 2] = data[1:50, 2] - 4
+
+# As the data are two dimensional, we can easily visualise with
+colours <- c(rep("red", 50), rep("blue", 50)) 
+plot(data, col = colours, xlab ="", ylab ="", pch = 20)
+
+# RUNNING K-MEANS
+km <- kmeans(data, centers = 2, nstart = 100)	
+
+# The kmeans() function returns a list with the results:
+names(km) 
+km$cluster 
+km$centers 
+km$size 
+km$withinss 
+km$tot.withinss
+
+# PERFORMANCE
+km$cluster
+plot(data, col = km$cluster, xlab ="", ylab ="", pch = 20)
+
+# K=3
+km <- kmeans(data, 3, nstart = 100)
+plot(data, col = km$cluster, xlab ="", ylab ="", pch = 20)
+
+# IMPORTANCE OF REPEATING THE ALGORITHM
+kmeans(data, 3, nstart = 1)$tot.withinss 
+kmeans(data, 3, nstart = 20)$tot.withinss 
+kmeans(data, 3, nstart = 100)$tot.withinss
+
+# ------------------------------------------------
+data <- read.csv("Utilities.csv")
+
+set.seed(1)
+row.names(data) <- data[,1] 
+data <- data[,-1] 
+head(data)
+dim(data)
+
+# Save the number of variables for later:
+p <- dim(data)[2]
+
+# STANDARDISING THE DATA
+data <- data.frame(scale(data))
+
+# CHECKING CLUSTER HOMOGENEITY
+
+# K RANGING FROM 1 TO 8
+k_max <- 8
+
+# Then we loop over the different k and save the results:
+css_vec <- numeric(k_max) 
+for(s in 1:k_max){
+  css_vec[s] <- mean(kmeans(data, s, nstart = 100)$withinss)
+}
+
+# PLOTTING
+plot(css_vec, type ="l")
+
+# APPLYING K MEANS
+k <- 6
+km <- kmeans(data, k, nstart = 1000)
+
+# INTERPRETING THE CLUSTERS
+
+# Create an empty plot with the variable names on the x -axis:
+xlim <- c(0, p)
+ylim <- c(min(km$centers), max(km$centers))
+plot(xlim, ylim, type = "n", xaxt = "n", ylab="", xlab="") 
+axis(1, at = 1:p, labels = names(data))
+
+# Next plot the centroids and add labels for the clusters
+for(i in 1:k){
+  lines(km$centers[i,], lty = i, lwd = 2, col = ifelse(i %in% c(1, 3, 5), "black", "dark grey"))
+}
+text(x=0.5, y=km$centers[,1], labels=paste("Cluster",c(1:k)))
+
+
+
+
+
+
+
+
+
+
+```
+
+
+
+# ---------------------------------------------------------------------------------------
+
+# 5 NETWORK ANALYSIS
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/5 - Network Analysis/Datasets")
+
+## GRAPHS IN R
+
+```{r}
+# CREATING GRAPHS AND WORKING WITH IT
+set.seed(1)
+# ----------------------------------
+
+# BASIC WAY OF CREATING GRAPHS 
+
+
+# We can create an undirected graph with a single edge using
+g1 <- graph(edges = c(1,4), directed = F)
+ 
+# We can then explore the summary of the graph and plot it with
+g1 
+plot(g1)
+
+# We can create a graph with more edges using:
+g2 <- graph(edges = c(1,2, 3,2, 4,5, 2,5), directed = F) 
+
+# CHECKING VERTICES AND EDGES
+V(g2)
+E(g2)
+
+# We can also specify the number of vertices with the n argument:
+g3 <- graph(c(1,2, 3,2, 4,5, 2,5), n = 10, directed = F) 
+
+# Creating the basic graph we used as an example before:
+g <- graph(c("A","B", "A","D", "B","C", "D","E"), directed=F)
+plot(g, vertex.size = 30)
+
+# ------------------------------------------
+
+# create an edge list in R:
+edges <- rbind( c("Dave", "Jenny"), c("Peter", "Jenny"),
+c("John", "Jenny"), c("Dave", "Peter"), c("Dave", "John"),
+c("Peter", "Sam"), c("Sam", "Albert"), c("Peter", "John"))
+
+# Create a graph from the edge list:
+g5 <- graph.edgelist(edges, directed = F) 
+plot(g5, vertex.size = 5, vertex.label.dist = 2)
+
+# We can also create graphs from adjacency matrices
+A <- matrix(0, 5, 5)
+A[1,2] <- 1; A[1,4] <- 1; A[2,3] <- 1; A[4,5] <- 1 
+A <- A + t(A)
+
+# CREATE THE GRAPH
+g <- graph.adjacency(A, mode = "undirected") 
+plot(g, vertex.size = 30)
+
+# Rename the vertices to match our basic graph from before
+V(g)$name <- c("A", "B", "C", "D", "E")
+plot(g,  vertex.size  =  30)
+
+# -------------------------------------------
+
+# CREATING GRAPHS WITH RANDOMLY DRAWN EDGES
+g_r <- sample_gnp(25, 0.1) 
+g_r
+plot(g_r)
+
+# DEGREES
+degree(g)
+
+# DEGREE DISTRIBUTION
+hist(degree(g))
+
+# SAME FOR RANDOM GRAPH
+degree(g_r) 
+hist(degree(g_r))
+
+# We can find all possible paths between A and the rest using
+all_simple_paths(g, "A")
+
+# We can also find all possible paths between two given vertices
+all_simple_paths(g_r, 7, 19)
+
+# To find the shortest paths between two vertices and the length
+shortest_paths(g_r, 7, 19)
+distances(g_r, 7, 19)
+
+# We check connectedness and find connected components with
+is_connected(g_r) 
+components(g_r)
+
+# ------------------
+
+# GRAPH MATRICES
+
+# We can retrieve the adjacency matrix of a graph with:
+A <- as.matrix(as_adjacency_matrix(g))
+
+# We can then create the degree matrix as
+D <- diag(degree(g))
+
+# The Laplacian is
+L <- D - A
+
+# Finally, the degree-corrected Laplacian is:
+L_n <- solve(D^(1/2)) %*% L %*% solve(D^(1/2))	
+
+# We can use the directed argument to create directed graphs
+g6 <- graph(c("A","B", "B","A", "A","D", "B","C", "D","E"),
+directed = T) 
+g6
+plot(g6, vertex.size = 30)
+
+# To create weighted graphs, we set the width vertex attribute
+g7 <- graph(c("A","B", "A","C", "B","C", "D","E"), directed = F)
+E(g7)$width <- c(6, 1, 2, 4) 
+g7
+plot(g7)
+
+
+
+
+
+
+
+```
+
+## VISUALISATION OF GRAPHS
+
+```{r}
+
+# Graph layout algorithms are typically random.
+setwd("C:/Users/amelb/Desktop/HA Almen/Semester 5/Machine Learning/5 - Network Analysis/Datasets")
+campnet <- read.csv("campnet.csv", row.names = 1) 
+campnet.attr <- read.csv("campnet_attr.csv") 
+head(campnet)
+campnet.attr
+
+set.seed(1)
+
+# Next we create the adjacency matrix and graph object, and plot
+A <- as.matrix(campnet) 
+g_c <- graph.adjacency(A) 
+plot(g_c)
+
+# Let’s try to use the plot arguments to make it better
+plot(g_c, vertex.label.cex=0.75, vertex.label.color="black", vertex.size=5, vertex.label.dist=1, vertex.color="green", edge.arrow.size = 0.1)
+
+# To see which colour names R recognises
+colors()
+
+# CHANGING LAYOUT ON GRAPH
+lay <- layout.random
+plot(g_c, layout=lay, vertex.label.cex = 0.75, vertex.label.color = "black", vertex.size = 5, vertex.label.dist = 1, vertex.color = "green", edge.arrow.size = 0.1)
+
+# There are many layout algorithms available. Try the following
+lay <- layout.grid 
+lay <- layout.circle 
+lay <- layout.sphere 
+lay <- layout.star
+lay <- layout.kamada.kawai
+lay <- layout.fruchterman.reingold
+
+# We can colour the vertices by Gender:
+plot(g_c, layout = lay, vertex.label.cex = 0.75, vertex.label.color = "black", vertex.size = 5, vertex.label.dist = 1, vertex.color = campnet.attr[["Gender"]], edge.arrow.size = 0.1)
+
+# OR BY ROLE
+plot(g_c, layout = lay, vertex.label.cex = 0.75, vertex.label.color = "black", vertex.size = 5, vertex.label.dist = 1, vertex.color = campnet.attr[["Role"]], edge.arrow.size = 0.1)
+
+# -------------------------------
+
+# THEEBAY NETWORK
+ebay <- read.csv("eBayNetwork.csv") 
+ebay[,1] <- as.factor(ebay[,1])
+ebay[,2] <- as.factor(ebay[,2])
+
+# Create the graph from the edge list
+edge_list <- as.matrix(ebay[,1:2])
+g <- graph.edgelist(edge_list, directed = F)
+
+# We make the width of the edges follow the logarithm of Weight.
+E(g)$width <- log(ebay[["Weight"]] + 1)
+
+# Then plot with vertex colour & size depending on if it’s a buyer: Notice that this is an example of a bipartite graph.
+buyers <- V(g)$name %in% edge_list[,2]
+plot(g, vertex.label = NA, vertex.color = ifelse(buyers, "red", "blue"), vertex.size = ifelse(buyers, 4, 8))
+
+
+
+
+
+
+
+```
+
+## NETWORK MEASURES
+( CAMPNET DATASET MAYBE NEEDED BEFORE: First we create an undirected version of the graph)
+campnet <- read.csv("campnet.csv", row.names = 1) 
+campnet.attr <- read.csv("campnet_attr.csv") 
+
+```{r}
+# We begin by drawing random graphs to illustrate density
+
+# First we draw a relatively sparse graph
+g_s <- sample_gnp(10, 0.3) 
+plot(g_s)
+
+# Then a relatively dense one:
+g_d <- sample_gnp(10, 0.75) 
+plot(g_d)
+
+# We can calculate the densities of each graph as:
+edge_density(g_d) 
+edge_density(g_s)
+
+# First we create an undirected version of the graph:
+g_c <- graph.adjacency(A, mode = "undirected")
+
+# We can find the order and size of the graph with:
+n <- vcount(g_c) 
+m <- ecount(g_c)
+
+# We can then calculate the density with:
+edge_density(g_c)
+
+# We can also calculate it manually as:
+m / (n * (n - 1) / 2)
+
+# We had already seen how to calculate the degrees:
+d <- degree(g_c)
+hist(d, breaks = seq(min(d) - 0.5, max(d) + 0.5, by = 1))
+
+# We can calculate the normalised degree centrality with:
+d / (n - 1)
+
+# Finally, we can calculate the eigenvector centrality using:
+eigen_centrality(g_c)$vector
+
+
+
+```
+
+## COMMUNITY DETECTION AND SPECTRAL CLUSTERING
+
+( CAMPNET DATASET MAYBE NEEDED BEFORE: First we create an undirected version of the graph) SLIDE 92
+campnet <- read.csv("campnet.csv", row.names = 1) 
+campnet.attr <- read.csv("campnet_attr.csv") 
+
+```{r}
+# PLOT THE NETWORK
+plot(g_c, vertex.label.cex = 0.75, vertex.size = 5, vertex.label.dist = 1, edge.arrow.size = 0.1)
+
+# We begin by calculating the Laplacian matrix as before
+A  <-  as.matrix(as_adjacency_matrix(g_c)) 
+D <- diag(degree(g_c))
+L <- D - A
+
+# Notice that its rows and columns sum to zero
+rowSums(L) 
+colSums(L)
+
+# EIGENVALUES IN R
+
+# We can use the eigen() command to obtain the spectral decomposition of a matrix: This returns a list with the eigenvalues and eigenvectors. 
+eig_L <- eigen(L)
+
+# To get the eigenvalues, we can use:
+eval_L <- eig_L$val
+
+# The smallest eigenvalue is zero, but not the second as the graph is connected:
+eval_L 
+plot(eval_L)
+
+# NORMALISED LAPLACIAN
+L_n <- solve(D^(1/2)) %*% L %*% solve(D^(1/2))
+
+# The eigenvalues are different, but the plot is very similar:
+eigen(L_n)$val 
+plot(eigen(L_n)$val)
+
+# The eigenplot would also suggest k = 3. Notice also that the smallest eigenvalue is the last one in R.
+
+# We can obtain the eigenvectors using
+evec <- eigen(L_n)$vec
+
+# Setting up for Spectral Clustering --------------------------------------------
+
+# Define k and n:
+k = 3
+n = vcount(g_c)
+
+# Next we create the matrix U. For this, we need to select the last k = 3 columns of evec.
+U = evec[,(n - k + 1):n]
+
+# Next we need the normalised matrix X
+row_lengths <- sqrt( rowSums(U^2) )
+X <- U / row_lengths
+
+# We can then run k-means on the n × k matrix X:
+ind_comm = kmeans(X, k, nstart = 100)$cluster	
+
+# PLOTTING
+plot(g_c, vertex.label.cex = 0.75, vertex.size = 5, vertex.label.dist = 1, edge.arrow.size = 0.1, vertex.color = ind_comm)
+
+```
+
+## TIME SERIES NETWORK MODELS
+
+### PARTIAL CONSIDERATIONS
+
+```{r}
+info <- read.csv("sp100-info.csv") 
+dates <- scan("sp100-dates.csv")
+ret <- read.csv("sp100-returns.csv", header = F)
+
+set.seed(1)
+
+# Save the dimensions of the returns
+n <- ncol(ret) 
+t <- nrow(ret)
+
+# We can plot a correlation heatmap of the returns using
+
+C <- cor(ret)
+rownames(C) <- as.character( info$Ticker.symbol ) 
+colnames(C) <- as.character( info$Ticker.symbol ) 
+heatmap(C, Rowv = NA, Colv = NA, scale="none")
+
+# We use the average return as a measure of the market return:
+f <- rowMeans(ret)
+
+# Create the idiosyncratic returns by regressing each of the return series on the market return:
+Y <- matrix(0, t, n)
+for( i in 1:n ){
+  model <- lm( ret[,i] ~ f ) 
+  Y[,i] <- model$resid
+}
+
+# Then plot a correlation heatmap for the idiosyncratic returns
+C <- cor(Y)
+rownames(C) <- as.character( info$Ticker.symbol ) 
+colnames(C) <- as.character( info$Ticker.symbol ) 
+heatmap(C, Rowv = NA, Colv = NA, scale="none")
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
